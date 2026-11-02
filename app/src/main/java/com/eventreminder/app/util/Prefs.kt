@@ -32,6 +32,13 @@ object Prefs {
     fun speak(c: Context): Boolean = sp(c).getBoolean("speak", true)
     fun setSpeak(c: Context, v: Boolean) = sp(c).edit().putBoolean("speak", v).apply()
 
+    /** Let the user say "snooze" / "dismiss" after the announcement (default on). */
+    fun voiceCommands(c: Context): Boolean = sp(c).getBoolean("voice_cmd", true)
+    fun setVoiceCommands(c: Context, v: Boolean) = sp(c).edit().putBoolean("voice_cmd", v).apply()
+    /** Also play the category tone together with the voice (default off: voice replaces the tone). */
+    fun toneAlso(c: Context): Boolean = sp(c).getBoolean("tone_also", false)
+    fun setToneAlso(c: Context, v: Boolean) = sp(c).edit().putBoolean("tone_also", v).apply()
+
     fun email(c: Context): String = sp(c).getString("email", "") ?: ""
     fun setEmail(c: Context, v: String) = sp(c).edit().putString("email", v.trim()).apply()
 

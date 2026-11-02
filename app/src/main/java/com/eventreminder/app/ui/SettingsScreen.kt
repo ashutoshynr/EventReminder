@@ -1,10 +1,15 @@
 package com.eventreminder.app.ui
 
+import android.Manifest
 import android.app.Activity
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.media.RingtoneManager
 import android.net.Uri
+import android.os.Bundle
 import android.os.Parcelable
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -23,11 +28,15 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.core.content.IntentCompat
 import com.eventreminder.app.backup.BackupManager
 import com.eventreminder.app.data.Category
 import com.eventreminder.app.data.Event
+import com.eventreminder.app.util.Command
 import com.eventreminder.app.util.Dates
+import com.eventreminder.app.util.RecogAdapter
+import com.eventreminder.app.util.VoiceCommand
 import com.eventreminder.app.util.Speech
 import com.eventreminder.app.util.Mailer
 import com.eventreminder.app.util.Prefs
@@ -66,8 +75,15 @@ fun SettingsScreen(onBack: () -> Unit, onQuit: () -> Unit) {
     // ---- Voice announcement ----
     var speak by remember { mutableStateOf(Prefs.speak(ctx)) }
     var voiceStatus by remember { mutableStateOf("") }
+    var toneAlso by remember { mutableStateOf(Prefs.toneAlso(ctx)) }
+    var voiceCmd by remember { mutableStateOf(Prefs.voiceCommands(ctx)) }
+    var micStatus by remember { mutableStateOf("") }
+    var wantTest by remember { mutableStateOf(false) }
     val ttsHolder = remember { arrayOfNulls<TextToSpeech>(1) }
-    DisposableEffect(Unit) { onDispose { ttsHolder[0]?.shutdown() } }
+    val recHolder = remember { arrayOfNulls<SpeechRecognizer>(1) }
+    DisposableEffect(Unit) { onDispose { ttsHolder[0]?.shutdown(); recHolder[0]?.destroy() } }
+
+    fun hasMic() = ContextCompat.checkSelfPermission(ctx, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
 
     fun hearSample() {
         ttsHolder[0]?.shutdown(); ttsHolder[0] = null
@@ -86,6 +102,46 @@ fun SettingsScreen(onBack: () -> Unit, onQuit: () -> Unit) {
             }
         }
         ttsHolder[0] = engine
+    }
+
+    /** Listens once and shows what was heard, so you can check that voice commands work on this phone. */
+    fun testVoice() {
+        if (!SpeechRecognizer.isRecognitionAvailable(ctx)) {
+            micStatus = "❌ No speech-recognition service on this phone. Install “Speech Services by Google” from the Play Store."
+            return
+        }
+        recHolder[0]?.destroy()
+        val r = SpeechRecognizer.createSpeechRecognizer(ctx)
+        recHolder[0] = r
+        micStatus = "🎤 Listening… say “snooze” or “dismiss”"
+        r.setRecognitionListener(object : RecogAdapter() {
+            override fun onResults(results: Bundle?) {
+                val list = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                val verdict = when (VoiceCommand.parse(list)) {
+                    Command.SNOOZE -> "SNOOZE ✅"
+                    Command.DISMISS -> "DISMISS ✅"
+                    null -> "no command recognised"
+                }
+                micStatus = "Heard: “${list?.firstOrNull() ?: "nothing"}” → $verdict"
+            }
+            override fun onError(error: Int) {
+                micStatus = "❌ Could not hear a command (error $error). Check the microphone permission and your internet connection."
+            }
+        })
+        r.startListening(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5)
+        })
+    }
+
+    val micPerm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) {
+            if (wantTest) testVoice()
+        } else {
+            voiceCmd = false; Prefs.setVoiceCommands(ctx, false)
+            micStatus = "Microphone permission was denied, so voice commands are off. You can still use the Snooze and Dismiss buttons."
+        }
+        wantTest = false
     }
 
     // ---- Cloud backup (Google Drive via the system picker) ----
@@ -264,16 +320,33 @@ fun SettingsScreen(onBack: () -> Unit, onQuit: () -> Unit) {
             if (mailStatus.isNotEmpty()) Text(mailStatus, style = MaterialTheme.typography.bodyMedium)
 
             HorizontalDivider()
-            Text("🗣️  Voice announcement", style = MaterialTheme.typography.titleMedium)
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    "Read out the event name and date when the alarm rings",
-                    Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium
-                )
-                Switch(speak, { speak = it; Prefs.setSpeak(ctx, it) })
+            Text("🗣️  Voice alarm", style = MaterialTheme.typography.titleMedium)
+            ToggleRow("Speak the event name and date instead of playing the alarm tone", speak) {
+                speak = it; Prefs.setSpeak(ctx, it)
             }
-            OutlinedButton(onClick = ::hearSample, modifier = Modifier.fillMaxWidth()) { Text("▶  Hear a sample") }
+            if (speak) {
+                ToggleRow("Also play the alarm tone", toneAlso) { toneAlso = it; Prefs.setToneAlso(ctx, it) }
+                ToggleRow("Voice commands: say “snooze” or “dismiss” after the announcement", voiceCmd) { on ->
+                    voiceCmd = on; Prefs.setVoiceCommands(ctx, on)
+                    if (on && !hasMic()) micPerm.launch(Manifest.permission.RECORD_AUDIO)
+                }
+            } else {
+                Text("Voice is off, so the alarm tone plays instead.", style = MaterialTheme.typography.bodySmall)
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedButton(onClick = ::hearSample, modifier = Modifier.weight(1f)) { Text("▶  Hear a sample") }
+                OutlinedButton(
+                    onClick = { if (hasMic()) testVoice() else { wantTest = true; micPerm.launch(Manifest.permission.RECORD_AUDIO) } },
+                    modifier = Modifier.weight(1f)
+                ) { Text("🎤  Test commands") }
+            }
             if (voiceStatus.isNotEmpty()) Text(voiceStatus, style = MaterialTheme.typography.bodySmall)
+            if (micStatus.isNotEmpty()) Text(micStatus, style = MaterialTheme.typography.bodyMedium)
+            Text(
+                "Voice commands use your phone's speech recognition (best with an internet connection) and the microphone " +
+                    "only while an alarm is waiting for your answer. The Snooze and Dismiss buttons always work too.",
+                style = MaterialTheme.typography.bodySmall
+            )
 
             HorizontalDivider()
             Text("🔔  Alarm sound per category", style = MaterialTheme.typography.titleMedium)
@@ -323,5 +396,13 @@ fun SettingsScreen(onBack: () -> Unit, onQuit: () -> Unit) {
             confirmButton = { TextButton({ confirmRestore = false; openFile.launch(arrayOf("*/*")) }) { Text("Choose file") } },
             dismissButton = { TextButton({ confirmRestore = false }) { Text("Cancel") } }
         )
+    }
+}
+
+@Composable
+private fun ToggleRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, Modifier.weight(1f).padding(end = 12.dp), style = MaterialTheme.typography.bodyMedium)
+        Switch(checked, onChange)
     }
 }

@@ -15,7 +15,7 @@ abstract class AppDatabase : RoomDatabase() {
 
         fun get(c: Context): AppDatabase = inst ?: synchronized(this) {
             inst ?: Room.databaseBuilder(c.applicationContext, AppDatabase::class.java, NAME)
-                .setJournalMode(JournalMode.WRITE_AHEAD_LOGGING)
+                .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
                 .build().also { inst = it }
         }
     }

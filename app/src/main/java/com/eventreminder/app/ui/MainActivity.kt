@@ -51,12 +51,17 @@ private fun AppContent(vm: MainViewModel) {
     var route by rememberSaveable { mutableStateOf("list") }
     var editId by rememberSaveable { mutableLongStateOf(0L) }
     var askQuit by rememberSaveable { mutableStateOf(false) }
-    val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
+    val permissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {}
 
     LaunchedEffect(Unit) {
-        if (Build.VERSION.SDK_INT >= 33 &&
-            ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-        ) permission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        val need = buildList {
+            if (Build.VERSION.SDK_INT >= 33 &&
+                ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+            ) add(Manifest.permission.POST_NOTIFICATIONS)
+            if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED)
+                add(Manifest.permission.RECORD_AUDIO)     // for the "snooze"/"dismiss" voice commands
+        }
+        if (need.isNotEmpty()) permissions.launch(need.toTypedArray())
     }
 
     // Back on a sub-screen returns to the list; Back on the list asks before quitting.
