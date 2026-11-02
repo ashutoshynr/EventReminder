@@ -1,0 +1,2 @@
+HSPLcom/eventreminder/app/**;->**(**)**
+Lcom/eventreminder/app/**;
